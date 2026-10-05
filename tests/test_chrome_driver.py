@@ -688,22 +688,27 @@ def _stub_pgrep(
     return commands, kills
 
 
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
 def test_kill_existing_chrome_processes_non_windows(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, system: str
 ) -> None:
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    """Fork change: no SIGTERM to every process with "chrome" in its argv."""
+
+    monkeypatch.setattr(platform, "system", lambda: system)
     monkeypatch.setattr(chrome_driver.time, "sleep", lambda _s: None)
     calls, kills = _stub_pgrep(monkeypatch, [4242])
 
     chrome_driver._kill_existing_chrome_processes()
 
-    assert calls == [["pgrep", "-f", "chrome"]]
-    assert kills == [(4242, signal.SIGTERM)]
+    assert calls == []
+    assert kills == []
 
 
 def test_kill_existing_chrome_processes_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Fork change: the user's Chrome windows are not force-killed."""
+
     calls: list[list[str]] = []
     monkeypatch.setattr(platform, "system", lambda: "Windows")
     monkeypatch.setattr(chrome_driver.time, "sleep", lambda _s: None)
@@ -713,7 +718,7 @@ def test_kill_existing_chrome_processes_windows(
 
     chrome_driver._kill_existing_chrome_processes()
 
-    assert calls == [["taskkill", "/f", "/im", "chrome.exe"]]
+    assert calls == []
 
 
 def test_kill_existing_chrome_processes_spares_self_and_ancestors(
@@ -749,7 +754,8 @@ def test_kill_existing_chrome_processes_spares_self_and_ancestors(
     monkeypatch.setattr(subprocess, "run", _fake_run)
     monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
 
-    chrome_driver._kill_existing_chrome_processes()
+    # Fork change: the pre-kill no longer calls the helper; exercise it directly.
+    chrome_driver._terminate_matching_processes("chrome")
 
     assert not any("pkill" in cmd for cmd in run_commands), (
         f"the broad pattern kill must be gone; commands were {run_commands}"
@@ -1567,23 +1573,64 @@ def test_safe_quit_driver_none_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     chrome_driver.safe_quit_driver(None)
 
 
+class _OwnProcess:
+    """Stand-in for the ``subprocess.Popen`` held by a driver's Service."""
+
+    def __init__(self, *, alive: bool) -> None:
+        self.alive = alive
+        self.killed = 0
+
+    def poll(self) -> int | None:
+        return None if self.alive else 0
+
+    def kill(self) -> None:
+        self.killed += 1
+        self.alive = False
+
+
 def test_safe_quit_driver_normal_non_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Fork change: only this driver's own chromedriver may be killed."""
+
     monkeypatch.setattr(platform, "system", lambda: "Linux")
     calls, kills = _stub_pgrep(monkeypatch, [4243])
 
     quit_calls = {"n": 0}
+    process = _OwnProcess(alive=True)
 
     class _Driver:
+        service = SimpleNamespace(process=process)
+
         def quit(self) -> None:
             quit_calls["n"] += 1
 
     chrome_driver.safe_quit_driver(_Driver())  # type: ignore[arg-type]
 
     assert quit_calls["n"] == 1
-    assert calls == [["pgrep", "-f", "chromedriver"]]
-    assert kills == [(4243, signal.SIGTERM)]
+    assert process.killed == 1
+    assert calls == []
+    assert kills == []
+
+
+def test_safe_quit_driver_does_not_kill_exited_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    calls, kills = _stub_pgrep(monkeypatch, [4243])
+    process = _OwnProcess(alive=False)
+
+    class _Driver:
+        service = SimpleNamespace(process=process)
+
+        def quit(self) -> None:
+            return None
+
+    chrome_driver.safe_quit_driver(_Driver())  # type: ignore[arg-type]
+
+    assert process.killed == 0
+    assert calls == []
+    assert kills == []
 
 
 def test_safe_quit_driver_oserror_is_handled(
@@ -1594,14 +1641,19 @@ def test_safe_quit_driver_oserror_is_handled(
     monkeypatch.setattr(
         subprocess, "run", lambda cmd, **k: calls.append(cmd) or SimpleNamespace()
     )
+    process = _OwnProcess(alive=True)
 
     class _Driver:
+        service = SimpleNamespace(process=process)
+
         def quit(self) -> None:
             raise OSError("WinError 6")
 
     chrome_driver.safe_quit_driver(_Driver())  # type: ignore[arg-type]
 
-    assert calls == [["taskkill", "/f", "/im", "chromedriver.exe"]]
+    # Fork change: no "taskkill /f /im chromedriver.exe" for every chromedriver.
+    assert calls == []
+    assert process.killed == 1
 
 
 def test_safe_quit_driver_other_exception_is_handled(

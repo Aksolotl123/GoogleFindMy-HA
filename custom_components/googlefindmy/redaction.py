@@ -21,14 +21,44 @@ dropped here rather than dragging ``homeassistant.core`` back in.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sized
 import re
+from collections.abc import Iterable, Mapping, Sized
 from typing import Any, cast
 
 # Consistent placeholder used when redacting fields.
 REDACTED = "**REDACTED**"
-# Fork change: e-mail address embedded in a mapping key (see async_redact_data).
-_EMAIL_IN_KEY_RE = re.compile(r"[^\s_]+@[^\s_]+")
+# Fork change: cache keys scoped by account e-mail ("<base>_<email>", optionally
+# behind a "<namespace>:" prefix). The local part of an address may itself
+# contain "_", so the address cannot be told apart from the base name
+# generically; the known base names are listed instead (longest first) and
+# everything after them is masked. Keys with any other shape that contain "@"
+# are replaced by the placeholder as a whole.
+_EMAIL_SCOPED_KEY_BASES = (
+    "adm_probe_startup_left",
+    "aas_token_issued_at",
+    "adm_token_issued_at",
+    "aas_best_ttl_sec",
+    "spot_token",
+    "shared_key",
+    "android_id",
+    "adm_token",
+    "owner_key",
+    "aas_token",
+)
+_EMAIL_SCOPED_KEY_RE = re.compile(
+    r"^(?P<prefix>(?:[^:@]*:)?(?:"
+    + "|".join(re.escape(base) for base in _EMAIL_SCOPED_KEY_BASES)
+    + r")_).*@"
+)
+
+
+def _redact_email_in_key(key: str) -> str:
+    """Return *key* with the embedded e-mail address (and anything after it) masked."""
+
+    match = _EMAIL_SCOPED_KEY_RE.match(key)
+    if match:
+        return f"{match.group('prefix')}{REDACTED}"
+    return REDACTED
 
 
 def async_redact_data[T](data: T, to_redact: Iterable[Any]) -> T:
@@ -43,17 +73,20 @@ def async_redact_data[T](data: T, to_redact: Iterable[Any]) -> T:
     redacted = dict(data)
 
     for key, value in list(redacted.items()):
+        if isinstance(key, str) and "@" in key:
+            # Fork change: keys scoped by account e-mail (e.g.
+            # "owner_key_<email>") never match an exact name; treat them as
+            # secret and mask the address inside the key name as well. Checked
+            # before the empty-value skip below, otherwise a None/"" value would
+            # leave the address in the key name.
+            del redacted[key]
+            redacted[_redact_email_in_key(key)] = REDACTED
+            continue
         if value is None:
             continue
         if isinstance(value, str) and not value:
             continue
-        if isinstance(key, str) and "@" in key:
-            # Fork change: keys scoped by account e-mail (e.g.
-            # "owner_key_<email>") never match an exact name; treat them as
-            # secret and mask the address inside the key name as well.
-            del redacted[key]
-            redacted[_EMAIL_IN_KEY_RE.sub(REDACTED, key)] = REDACTED
-        elif key in to_redact:
+        if key in to_redact:
             redacted[key] = REDACTED
         elif isinstance(value, Mapping):
             redacted[key] = async_redact_data(value, to_redact)

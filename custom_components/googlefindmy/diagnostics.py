@@ -152,6 +152,13 @@ TO_REDACT: list[str] = [
     "owner_key",
     "fcm_routing_tokens",
     "registration",
+    # Fork change: further bare secret names from the token cache / bundle.
+    # Their e-mail-suffixed variants ("spot_token_<email>" etc.) are caught by
+    # the "@"-in-key rule in redaction.async_redact_data.
+    "spot_token",
+    "adm_token",
+    "vapid_key",
+    "project_id",
 ]
 
 # ---------------------------------------------------------------------------

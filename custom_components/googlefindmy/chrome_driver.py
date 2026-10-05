@@ -453,9 +453,10 @@ def _terminate_matching_processes(pattern: str) -> int:
 
 
 def _kill_existing_chrome_processes() -> None:
-    """Terminate any existing Chrome processes to avoid conflicts.
+    """Historical pre-login cleanup of existing Chrome processes; now a no-op.
 
-    This helps prevent issues when Chrome is already running or has zombie processes.
+    Fork change: kept as a hook (callers and tests patch it), but it no longer
+    terminates anything -- see the comment below.
     """
     if _is_container_login():
         # In the selenium/standalone-chrome image a broad ``pkill -f chrome``
@@ -467,17 +468,13 @@ def _kill_existing_chrome_processes() -> None:
             "preserve the Selenium/noVNC stack."
         )
         return
-    try:
-        if platform.system() == "Windows":
-            # Fork change: do not force-kill every Chrome window the user has
-            # open (taskkill /im chrome.exe). undetected-chromedriver starts
-            # Chrome with its own temporary profile, so no conflict arises.
-            LOGGER.debug("Windows: skipping the pre-kill of existing Chrome processes")
-        else:
-            _terminate_matching_processes("chrome")
-        time.sleep(2)  # Allow time for processes to terminate
-    except Exception:  # pragma: no cover - defensive, best-effort cleanup
-        LOGGER.debug("Failed to kill existing Chrome processes (non-fatal)")
+    # Fork change: no pre-kill on any platform. On Windows it force-killed every
+    # Chrome window the user had open (taskkill /im chrome.exe); on Linux/macOS
+    # it sent SIGTERM to every process with "chrome" anywhere in its command
+    # line (the user's browser, other Chromium-based apps, editors with a
+    # matching path). undetected-chromedriver starts Chrome with its own
+    # temporary profile, so a running browser does not conflict with it.
+    LOGGER.debug("Skipping the pre-kill of existing Chrome processes")
 
 
 def find_chrome() -> str | None:
@@ -919,6 +916,14 @@ def safe_quit_driver(driver: RemoteWebDriver | None) -> None:
     if driver is None:
         return
 
+    # Fork change: remember this driver's own chromedriver process (the
+    # subprocess.Popen held by its Service) before quitting, so the force-kill
+    # below targets only that process instead of every chromedriver on the
+    # machine (taskkill /f /im chromedriver.exe, pgrep -f chromedriver).
+    own_process: Any = None
+    with contextlib.suppress(Exception):
+        own_process = getattr(getattr(driver, "service", None), "process", None)
+
     try:
         # Try normal quit first
         driver.quit()
@@ -928,25 +933,12 @@ def safe_quit_driver(driver: RemoteWebDriver | None) -> None:
     except Exception as err:  # noqa: BLE001 - cleanup should not raise
         LOGGER.debug("Error during driver quit: %s", err)
     finally:
-        # Force kill any remaining processes
+        # Force kill this driver's chromedriver if it survived quit(). A remote
+        # driver (Selenium Grid in the docker-login container) has no local
+        # service process, so the shared noVNC/X stack is never touched.
         try:
-            if _is_container_login():
-                # ``pkill -f chromedriver`` would also match the Selenium Grid
-                # node and tear down the shared noVNC/X stack (see
-                # _is_container_login). ``driver.quit()`` above already released
-                # this driver, so leave the shared container stack alone.
-                LOGGER.debug(
-                    "Container login detected; skipping chromedriver "
-                    "force-kill to preserve the Selenium/noVNC stack."
-                )
-            elif platform.system() == "Windows":
-                subprocess.run(
-                    ["taskkill", "/f", "/im", "chromedriver.exe"],
-                    capture_output=True,
-                    check=False,
-                )
-            else:
-                _terminate_matching_processes("chromedriver")
+            if own_process is not None and own_process.poll() is None:
+                own_process.kill()
         except Exception:  # noqa: BLE001 - cleanup should not raise
             pass
 

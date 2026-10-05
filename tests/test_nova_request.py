@@ -3458,3 +3458,46 @@ class TestTheDocumentedExtentStaysTrue:
         assert [name for name in cited if name not in defined] == [], {
             name: where for name, where in sorted(cited.items()) if name not in defined
         }
+
+
+async def test_async_ttl_policy_masks_account_email_in_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Fork change: AAS TTL INFO/WARNING logs must not carry the raw e-mail."""
+
+    username = "jan_kowalski@example.com"
+    store: dict[str, Any] = {}
+
+    async def _get(key: str) -> Any:
+        return store.get(key)
+
+    async def _set(key: str, value: Any) -> None:
+        store[key] = value
+
+    async def _refresh() -> str:
+        return "fresh-token"
+
+    policy = AsyncTTLPolicy(
+        username=username,
+        logger=logging.getLogger("test_mask_email_logs"),
+        get_value=_get,
+        set_value=_set,
+        refresh_fn=_refresh,
+        set_auth_header_fn=lambda _: None,
+    )
+    caplog.set_level(logging.DEBUG, logger="test_mask_email_logs")
+
+    # "lived ... hours", "Updated AAS best TTL" and "Invalidating cached AAS".
+    store[policy.k_aas_issued] = time.time() - 2 * 3600
+    await policy.async_invalidate_aas_token()
+    # "past learned threshold".
+    store[policy.k_aas_issued] = time.time() - 10 * 3600
+    store[policy.k_aas_bestttl] = 2 * 3600
+    assert await policy.async_check_aas_proactive_refresh() is False
+
+    messages = [r.getMessage() for r in caplog.records]
+    for fragment in ("lived", "best TTL", "Invalidating", "past learned threshold"):
+        assert any(fragment in m for m in messages), (fragment, messages)
+    assert username not in caplog.text
+    assert "kowalski" not in caplog.text
+    assert "j***@example.com" in caplog.text

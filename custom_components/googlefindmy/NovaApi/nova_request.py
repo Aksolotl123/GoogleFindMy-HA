@@ -39,6 +39,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 
+from custom_components.googlefindmy.Auth.aas_token_retrieval import (
+    _mask_email_for_logs,
+)
 from custom_components.googlefindmy.Auth.adm_token_retrieval import (
     async_get_adm_token as async_get_adm_token_api,
 )
@@ -1006,7 +1009,7 @@ class AsyncTTLPolicy(TTLPolicy):
             observed_ttl_hours = observed_ttl / 3600
             self.log.info(
                 "AAS token for %s lived %.1f hours before invalidation.",
-                self.username,
+                _mask_email_for_logs(self.username),
                 observed_ttl_hours,
             )
             # Skip TTL learning for very short lifetimes - these typically indicate
@@ -1030,7 +1033,7 @@ class AsyncTTLPolicy(TTLPolicy):
                         pass
                 self.log.info(
                     "Updated AAS best TTL for %s to %.1f hours (with 5%% margin).",
-                    self.username,
+                    _mask_email_for_logs(self.username),
                     safe_ttl / 3600,
                 )
         except (TypeError, ValueError) as e:
@@ -1051,7 +1054,7 @@ class AsyncTTLPolicy(TTLPolicy):
 
         self.log.warning(
             "Invalidating cached AAS token for %s due to persistent 401 errors.",
-            self.username,
+            _mask_email_for_logs(self.username),
         )
         for key in self._key_variants(DATA_AAS_TOKEN):
             try:
@@ -1102,7 +1105,7 @@ class AsyncTTLPolicy(TTLPolicy):
                 self.log.info(
                     "AAS token for %s past learned threshold (%.1f hours); "
                     "will validate on next ADM refresh.",
-                    self.username,
+                    _mask_email_for_logs(self.username),
                     best_ttl / 3600,
                 )
                 return False

@@ -81,7 +81,7 @@ def test_module_stays_free_of_home_assistant_imports() -> None:
             imported.add(node.module.split(".")[0])
 
     assert "homeassistant" not in imported
-    assert imported <= {"__future__", "collections", "typing"}
+    assert imported <= {"__future__", "collections", "re", "typing"}
 
 
 def test_describe_keys_reports_names_without_values() -> None:
@@ -96,3 +96,46 @@ def test_describe_keys_reports_names_without_values() -> None:
 def test_describe_keys_falls_back_to_shape_for_non_mappings() -> None:
     assert describe_keys(["a", "b"]) == "list len=2"
     assert describe_keys("abc") == "str len=3"
+
+
+# Fork change: keys scoped by account e-mail ("<base>_<email>").
+
+
+@pytest.mark.parametrize("value", [None, "", "secret-token"])
+def test_email_scoped_key_is_masked_even_for_empty_values(value: object) -> None:
+    """The address must leave the key name also when the value is None/""."""
+
+    data = {"owner_key_jan@example.com": value, "plain": value}
+
+    result = async_redact_data(data, set())
+
+    assert result == {"owner_key_" + REDACTED: REDACTED, "plain": value}
+    assert not any("example.com" in key for key in result)
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("adm_token_jan_kowalski@example.com", "adm_token_" + REDACTED),
+        ("spot_token_j_k_l@example.com", "spot_token_" + REDACTED),
+        ("adm_token_issued_at_jan_k@example.com", "adm_token_issued_at_" + REDACTED),
+        (
+            "adm_probe_startup_left_jan_k@example.com",
+            "adm_probe_startup_left_" + REDACTED,
+        ),
+        ("aas_best_ttl_sec_jan_k@example.com", "aas_best_ttl_sec_" + REDACTED),
+        ("entry-x:adm_token_a_b@example.com", "entry-x:adm_token_" + REDACTED),
+        # Unknown shape: the whole key is replaced.
+        ("custom_jan_kowalski@example.com", REDACTED),
+        ("jan_kowalski@example.com", REDACTED),
+    ],
+)
+def test_email_with_underscore_is_masked_completely(key: str, expected: str) -> None:
+    result = async_redact_data({key: "value", "nested": {key: None}}, set())
+
+    assert result[expected] == REDACTED
+    assert result["nested"] == {expected: REDACTED}
+    for out_key in (*result, *result["nested"]):
+        assert "jan" not in out_key
+        assert "kowalski" not in out_key
+        assert "example.com" not in out_key
