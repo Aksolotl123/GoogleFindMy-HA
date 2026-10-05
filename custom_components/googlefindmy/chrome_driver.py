@@ -469,11 +469,10 @@ def _kill_existing_chrome_processes() -> None:
         return
     try:
         if platform.system() == "Windows":
-            subprocess.run(
-                ["taskkill", "/f", "/im", "chrome.exe"],
-                capture_output=True,
-                check=False,
-            )
+            # Fork change: do not force-kill every Chrome window the user has
+            # open (taskkill /im chrome.exe). undetected-chromedriver starts
+            # Chrome with its own temporary profile, so no conflict arises.
+            LOGGER.debug("Windows: skipping the pre-kill of existing Chrome processes")
         else:
             _terminate_matching_processes("chrome")
         time.sleep(2)  # Allow time for processes to terminate
