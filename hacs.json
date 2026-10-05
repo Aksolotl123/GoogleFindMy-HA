@@ -1,5 +1,5 @@
 {
-  "name": "Google Find My Device",
+  "name": "Google Find Hub (fork)",
   "homeassistant": "2025.9.1",
   "content_in_root": false,
   "zip_release": true,

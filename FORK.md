@@ -7,6 +7,8 @@ Fork-specific changes:
 
 - `chrome_driver.py`: on Windows the login helper no longer force-kills every running
   Chrome process (`taskkill /f /im chrome.exe`) before opening its own browser.
+- Integration name changed to "Google Find Hub (fork)" (`manifest.json`, `hacs.json`); documentation and
+  device "Visit" links point to this fork, the issue tracker to upstream.
 
 Releases of this fork are tagged `<upstream version>.<fork revision>` (e.g. `1.7.15.19.1`)
 and carry a `googlefindmy.zip` asset built from `custom_components/googlefindmy/`, as HACS expects.

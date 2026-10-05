@@ -429,7 +429,7 @@ class GoogleFindMyEntity(CoordinatorEntity[GoogleFindMyCoordinator]):
             "manufacturer": SERVICE_DEVICE_MANUFACTURER,
             "model": SERVICE_DEVICE_MODEL,
             "sw_version": INTEGRATION_VERSION,
-            "configuration_url": "https://github.com/BSkando/GoogleFindMy-HA",
+            "configuration_url": "https://github.com/Aksolotl123/GoogleFindMy-HA",
             "entry_type": dr.DeviceEntryType.SERVICE,
             "name": service_name,
             "translation_key": SERVICE_DEVICE_TRANSLATION_KEY,
