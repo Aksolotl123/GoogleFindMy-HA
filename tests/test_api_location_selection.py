@@ -298,6 +298,10 @@ async def test_async_get_device_location_marks_decrypt_proof_hidden_by_semantic(
     record. The full-list decrypt proof must survive that collapse via the internal
     ``_decrypt_proven`` hint, otherwise the poll loop would miss the successful
     decrypt and let a later transient failure trip a spurious reauth.
+
+    Fork: a SEMANTIC row borrows the coordinates of a fix from the previous hour
+    (``_borrow_recent_coordinates``), so the fix here lies outside that window to
+    keep the returned row report-less. Borrowing is covered by its own tests below.
     """
 
     async def fake_get_location_data_for_device(
@@ -306,10 +310,11 @@ async def test_async_get_device_location_marks_decrypt_proof_hidden_by_semantic(
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
         return [
-            # Older coordinate report: a genuine decrypted fix.
+            # Older coordinate report: a genuine decrypted fix, more than an hour
+            # older than the SEMANTIC row, so the fork does not borrow it.
             {"last_seen": 100.0, "latitude": 1.0, "longitude": 2.0},
             # Newer SEMANTIC row: outranks the fix in the selector, no coordinates.
-            {"last_seen": 200.0, "semantic_name": "Home", "latitude": None},
+            {"last_seen": 100.0 + 7200.0, "semantic_name": "Home", "latitude": None},
         ]
 
     monkeypatch.setattr(
@@ -351,3 +356,88 @@ async def test_async_get_device_location_marks_no_proof_for_reportless_only(
     best = await api.async_get_device_location("dev-1", "Tracker")
 
     assert best.get("_decrypt_proven") is False
+
+
+async def test_async_get_device_location_semantic_borrows_recent_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fork: a SEMANTIC row borrows a fix from the last hour and keeps the proof."""
+
+    async def fake_get_location_data_for_device(
+        device_id: str,
+        device_name: str,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        return [
+            {"last_seen": 100.0, "latitude": 1.0, "longitude": 2.0, "accuracy": 30.0},
+            {"last_seen": 200.0, "semantic_name": "Home", "latitude": None},
+        ]
+
+    monkeypatch.setattr(
+        "custom_components.googlefindmy.api.get_location_data_for_device",
+        fake_get_location_data_for_device,
+    )
+
+    api = GoogleFindMyAPI(cache=_StubCache())
+    best = await api.async_get_device_location("dev-1", "Tracker")
+
+    # The SEMANTIC row still wins (label and newer timestamp are kept)...
+    assert best.get("semantic_name") == "Home"
+    assert best.get("last_seen") == 200.0
+    # ...with the coordinates of the recent fix...
+    assert (best.get("latitude"), best.get("longitude")) == (1.0, 2.0)
+    assert best.get("accuracy") == 30.0
+    # ...and the decrypt proof is unaffected by the borrowing.
+    assert best.get("_decrypt_proven") is True
+
+
+def test_borrow_recent_coordinates_picks_freshest_donor_in_window() -> None:
+    """The freshest coordinate report inside the window is borrowed."""
+
+    best = {"last_seen": 10_000.0, "semantic_name": "Home", "latitude": None}
+    normed = [
+        {"last_seen": 10_000.0 - 3000.0, "latitude": 1.0, "longitude": 1.0},
+        {"last_seen": 10_000.0 - 600.0, "latitude": 2.0, "longitude": 2.0},
+        best,
+    ]
+
+    out = api_module._borrow_recent_coordinates(best, normed)
+
+    assert (out["latitude"], out["longitude"]) == (2.0, 2.0)
+    assert out["semantic_name"] == "Home"
+    # The input record is not mutated.
+    assert best["latitude"] is None
+
+
+def test_borrow_recent_coordinates_ignores_donors_outside_window() -> None:
+    """A fix older than the borrow window is not used."""
+
+    max_age = api_module._SEMANTIC_COORD_BORROW_MAX_AGE_S
+    best = {"last_seen": 10_000.0, "semantic_name": "Home", "latitude": None}
+    normed = [
+        {"last_seen": 10_000.0 - max_age - 1.0, "latitude": 1.0, "longitude": 1.0},
+        best,
+    ]
+
+    assert api_module._borrow_recent_coordinates(best, normed) is best
+
+
+def test_borrow_recent_coordinates_keeps_existing_coordinates() -> None:
+    """A best record that already has coordinates is returned unchanged."""
+
+    best = {"last_seen": 10_000.0, "latitude": 5.0, "longitude": 6.0}
+    normed = [{"last_seen": 9_990.0, "latitude": 1.0, "longitude": 1.0}, best]
+
+    assert api_module._borrow_recent_coordinates(best, normed) is best
+
+
+def test_borrow_recent_coordinates_without_timestamp_or_donor() -> None:
+    """No usable timestamp, or no coordinate report at all, means no borrowing."""
+
+    no_ts = {"semantic_name": "Home", "latitude": None}
+    donor = {"last_seen": 100.0, "latitude": 1.0, "longitude": 1.0}
+    assert api_module._borrow_recent_coordinates(no_ts, [donor, no_ts]) is no_ts
+
+    lonely = {"last_seen": 200.0, "semantic_name": "Home", "latitude": None}
+    reportless = {"last_seen": 150.0, "metadata_only": True}
+    assert api_module._borrow_recent_coordinates(lonely, [reportless, lonely]) is lonely

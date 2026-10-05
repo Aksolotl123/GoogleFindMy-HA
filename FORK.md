@@ -21,6 +21,9 @@ Fork-specific changes:
 - `NovaApi/nova_request.py`: the account e-mail is masked in the AAS token TTL INFO/WARNING log lines.
 - `api.py`: when the newest record is a coordinate-less SEMANTIC report (e.g. "at home"), coordinates of the
   freshest report from the previous hour are borrowed, so a tracker without a cached fix no longer stays `unknown`.
+  The upstream test `test_async_get_device_location_marks_decrypt_proof_hidden_by_semantic` keeps its fix
+  outside that hour (it guards the `_decrypt_proven` hint, not the missing coordinates); the borrowing itself is
+  covered by `test_borrow_recent_coordinates_*` and `..._semantic_borrows_recent_fix`.
 
 Releases of this fork are tagged `<upstream version>.<fork revision>` (e.g. `1.7.15.19.1`); since
 `1.7.15.19.4` the version in `manifest.json` (with `const.py` and `pyproject.toml`) matches the tag.
