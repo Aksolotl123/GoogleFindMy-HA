@@ -22,10 +22,13 @@ dropped here rather than dragging ``homeassistant.core`` back in.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sized
+import re
 from typing import Any, cast
 
 # Consistent placeholder used when redacting fields.
 REDACTED = "**REDACTED**"
+# Fork change: e-mail address embedded in a mapping key (see async_redact_data).
+_EMAIL_IN_KEY_RE = re.compile(r"[^\s_]+@[^\s_]+")
 
 
 def async_redact_data[T](data: T, to_redact: Iterable[Any]) -> T:
@@ -44,7 +47,13 @@ def async_redact_data[T](data: T, to_redact: Iterable[Any]) -> T:
             continue
         if isinstance(value, str) and not value:
             continue
-        if key in to_redact:
+        if isinstance(key, str) and "@" in key:
+            # Fork change: keys scoped by account e-mail (e.g.
+            # "owner_key_<email>") never match an exact name; treat them as
+            # secret and mask the address inside the key name as well.
+            del redacted[key]
+            redacted[_EMAIL_IN_KEY_RE.sub(REDACTED, key)] = REDACTED
+        elif key in to_redact:
             redacted[key] = REDACTED
         elif isinstance(value, Mapping):
             redacted[key] = async_redact_data(value, to_redact)

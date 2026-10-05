@@ -130,6 +130,60 @@ def _short_err(e: Exception | str) -> str:
     return msg
 
 
+# Fork change: how far back a coordinate report may lie behind a newer,
+# coordinate-less SEMANTIC report and still be borrowed by it.
+_SEMANTIC_COORD_BORROW_MAX_AGE_S = 3600.0
+
+
+def _borrow_recent_coordinates(
+    best: dict[str, Any], normed: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Give a coordinate-less best record the coordinates of a recent sibling.
+
+    Fork change. The ranking prefers the newest ``last_seen``, so a SEMANTIC
+    report (e.g. "at home", no latitude/longitude) issued at request time wins
+    over crowdsourced/aggregated reports from a few minutes earlier. For a
+    tracker with no cached fix this left the entity ``unknown`` although Google
+    had just returned usable coordinates. Borrow the freshest coordinate report
+    no older than ``_SEMANTIC_COORD_BORROW_MAX_AGE_S`` before the best record;
+    the semantic label and the newer ``last_seen`` are kept.
+    """
+
+    def _is_num(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    if _is_num(best.get("latitude")) and _is_num(best.get("longitude")):
+        return best
+    try:
+        best_ts = float(best.get("last_seen") or 0.0)
+    except (TypeError, ValueError):
+        return best
+    if best_ts <= 0:
+        return best
+
+    donor: dict[str, Any] | None = None
+    donor_ts = float("-inf")
+    for cand in normed:
+        if not (_is_num(cand.get("latitude")) and _is_num(cand.get("longitude"))):
+            continue
+        try:
+            ts = float(cand.get("last_seen") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if ts <= 0 or best_ts - ts > _SEMANTIC_COORD_BORROW_MAX_AGE_S:
+            continue
+        if ts > donor_ts:
+            donor, donor_ts = cand, ts
+    if donor is None:
+        return best
+
+    out = dict(best)
+    for field in ("latitude", "longitude", "accuracy", "altitude"):
+        if donor.get(field) is not None:
+            out[field] = donor[field]
+    return out
+
+
 def _classify_nova_auth_error(err: NovaAuthError) -> SoundDispatchOutcome:
     """Name who refused when the transport raised ``NovaAuthError``.
 
@@ -882,9 +936,9 @@ class GoogleFindMyAPI:
         if not records:
             return {}
 
-        best_record, _ = _decoder_select_best_location(records)
+        best_record, normed = _decoder_select_best_location(records)
         if best_record is not None:
-            return best_record
+            return _borrow_recent_coordinates(best_record, normed)
         return records[0]
 
     # ------------------------ FCM helper (via provider) --------------------------

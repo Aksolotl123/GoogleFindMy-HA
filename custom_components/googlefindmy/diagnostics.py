@@ -142,6 +142,16 @@ TO_REDACT: list[str] = [
     # writes it here today, and the net is spanned for tomorrow.
     "coarse_latitude",
     "coarse_longitude",
+    # Fork change: the imported secrets bundle reaches effective_config as
+    # "secrets_data", whose keys carry the account e-mail as a suffix
+    # (owner_key_<email>, spot_token_<email>, adm_token_<email>), so the exact
+    # key match above never fired and shared_key/owner_key/OAuth tokens were
+    # exported in clear text. Redact the whole bundle and the bare key names.
+    "secrets_data",
+    "shared_key",
+    "owner_key",
+    "fcm_routing_tokens",
+    "registration",
 ]
 
 # ---------------------------------------------------------------------------
