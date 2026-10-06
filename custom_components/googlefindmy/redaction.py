@@ -52,6 +52,17 @@ _EMAIL_SCOPED_KEY_RE = re.compile(
 )
 
 
+# Fork change: key names are compared in a normalised form, so "Access-Token",
+# "accessToken", "ACCESS_TOKEN" and "Email" redact like "access_token"/"email".
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _fold_key(key: str) -> str:
+    """Return *key* as snake_case for case/style-insensitive comparison."""
+
+    return _CAMEL_BOUNDARY_RE.sub("_", key).replace("-", "_").casefold()
+
+
 def _redact_email_in_key(key: str) -> str:
     """Return *key* with the embedded e-mail address (and anything after it) masked."""
 
@@ -64,12 +75,15 @@ def _redact_email_in_key(key: str) -> str:
 def async_redact_data[T](data: T, to_redact: Iterable[Any]) -> T:
     """Redact sensitive keys from mappings or lists without importing HA's HTTP stack."""
 
-    if not isinstance(data, (Mapping, list)):
+    if not isinstance(data, (Mapping, list, tuple)):
         return data
 
-    if isinstance(data, list):
+    if isinstance(data, (list, tuple)):
+        # Fork change: tuples are walked like lists (they used to pass through
+        # unredacted); the result is a list either way.
         return cast(T, [async_redact_data(item, to_redact) for item in data])
 
+    folded = {_fold_key(key) for key in to_redact if isinstance(key, str)}
     redacted = dict(data)
 
     for key, value in list(redacted.items()):
@@ -86,11 +100,11 @@ def async_redact_data[T](data: T, to_redact: Iterable[Any]) -> T:
             continue
         if isinstance(value, str) and not value:
             continue
-        if key in to_redact:
+        if key in to_redact or (isinstance(key, str) and _fold_key(key) in folded):
             redacted[key] = REDACTED
         elif isinstance(value, Mapping):
             redacted[key] = async_redact_data(value, to_redact)
-        elif isinstance(value, list):
+        elif isinstance(value, (list, tuple)):
             redacted[key] = [async_redact_data(item, to_redact) for item in value]
 
     return cast(T, redacted)

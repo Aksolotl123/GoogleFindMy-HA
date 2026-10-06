@@ -556,3 +556,40 @@ def test_try_base64_like_invalid_raises() -> None:
     # A single data char can never form a base64 byte -> both decoders raise.
     with pytest.raises((ValueError, TypeError)):
         gok._try_base64_like("z")
+
+
+# Fork change: the account e-mail is masked in the owner-key log lines.
+@pytest.mark.parametrize(
+    ("seed", "match"), [("z", "Invalid owner_key"), (HEX16, "32 bytes")]
+)
+async def test_owner_key_error_logs_mask_the_account_email(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    seed: str,
+    match: str,
+) -> None:
+    _patch_retrieval(monkeypatch)
+    cache = _FakeCache()
+    user = "jan.kowalski@user.example"
+    cache.seed(_user_cache_key(user), seed)
+
+    with pytest.raises(RuntimeError, match=match):
+        await gok.async_get_owner_key(cache=cache, username=user)
+
+    assert "j***@user.example" in caplog.text
+    assert "jan.kowalski" not in caplog.text
+
+
+async def test_owner_key_success_log_masks_the_account_email(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _patch_retrieval(monkeypatch)
+    caplog.set_level("INFO", logger=gok.__name__)
+
+    await gok.async_get_owner_key(
+        cache=_FakeCache(), username="jan.kowalski@user.example", force_refresh=True
+    )
+
+    assert "user=j***@user.example" in caplog.text
+    assert "kowalski" not in caplog.text

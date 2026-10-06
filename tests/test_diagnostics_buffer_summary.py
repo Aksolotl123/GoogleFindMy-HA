@@ -22,6 +22,7 @@ from custom_components.googlefindmy.const import (
     OPT_GOOGLE_HOME_FILTER_KEYWORDS,
     OPT_IGNORED_DEVICES,
     OPT_LOCATION_POLL_INTERVAL,
+    SECRETS_EXTRA_WATCH_PATHS,
 )
 from tests.helpers import drain_loop
 from tests.helpers.single_owner_device_registry import SingleOwnerDeviceRegistry
@@ -404,3 +405,61 @@ def test_device_count_is_none_when_the_registry_cannot_answer(
     payload = _run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
 
     assert payload["registries"]["device"]["devices_count"] is None
+
+
+# Fork change: free-form text in buffer entries and the extra secrets watch
+# paths (home directory / OS user name) are not exported verbatim.
+
+
+def test_buffer_free_text_keeps_only_type_and_length() -> None:
+    entry = {
+        "code": "decrypt_error",
+        "error_type": "InvalidTag",
+        "error_msg": "owner key lookup failed for jan.kowalski@example.com",
+        "arg": "Keys of Jan",
+        "reason": "device 'Keys of Jan' not found",
+        "count": 3,
+    }
+
+    sanitized = diagnostics._sanitize_diag_entry(entry)
+
+    assert sanitized["error_msg"] == f"str len={len(entry['error_msg'])}"
+    assert sanitized["arg"] == "str len=11"
+    assert sanitized["reason"].startswith("str len=")
+    assert sanitized["error_type"] == "InvalidTag"
+    assert sanitized["count"] == 3
+    dumped = repr(sanitized)
+    assert "example.com" not in dumped
+    assert "Jan" not in dumped
+
+
+def test_secrets_watch_paths_are_counted_not_listed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = _StubCoordinator()
+    entry = _StubEntry(
+        coordinator,
+        options={
+            SECRETS_EXTRA_WATCH_PATHS: ["/home/jkowalski/secrets.json", "/opt/x.json"]
+        },
+    )
+    hass = _StubHass(entry, coordinator)
+
+    async def _fake_get_integration(_hass, _domain):
+        return SimpleNamespace(name="Test Integration", version="1.2.3")
+
+    monkeypatch.setattr(diagnostics, "async_get_integration", _fake_get_integration)
+    monkeypatch.setattr(
+        diagnostics.dr, "async_get", lambda _hass: SimpleNamespace(devices={})
+    )
+    monkeypatch.setattr(
+        diagnostics.er, "async_get", lambda _hass: SimpleNamespace(entities={})
+    )
+
+    payload = _run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
+
+    assert (
+        payload["effective_config"][SECRETS_EXTRA_WATCH_PATHS]
+        == [diagnostics.REDACTED] * 2
+    )
+    assert "jkowalski" not in repr(payload)

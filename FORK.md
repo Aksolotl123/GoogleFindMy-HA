@@ -24,6 +24,17 @@ Fork-specific changes:
   The upstream test `test_async_get_device_location_marks_decrypt_proof_hidden_by_semantic` keeps its fix
   outside that hour (it guards the `_decrypt_proven` hint, not the missing coordinates); the borrowing itself is
   covered by `test_borrow_recent_coordinates_*` and `..._semantic_borrows_recent_fix`.
+- `services.py`: the maintenance services `refresh_device_urls`, `rebuild_device_registry` and `rebuild_registry`
+  (registry rewrites, entity/device removal, config-entry reloads) are restricted to administrators, with the same
+  check as Core's `async_register_admin_service` (a non-admin user gets `Unauthorized`; automations and scripts
+  still run them). Locate and sound services stay available to every user.
+- Account e-mail out of the logs: `entry.title` (the account address) is no longer logged at INFO
+  (`services.py` hub cleanup, `__init__.py` ignored-device message — the entry id is logged instead);
+  `get_owner_key.py` masks the address as `j***@example.com` and logs only the error type of a decoding failure.
+- `redaction.py`: key names match regardless of case and naming style (`Access-Token`, `accessToken`, `EMAIL`),
+  tuples are redacted like lists.
+- `diagnostics.py`: free-form text in the diagnostics buffer (`error_msg`, `arg`, `reason`, …) is exported as type
+  and length only; `secrets_extra_watch_paths` (home directory / OS user name) is exported as a count of placeholders.
 
 Releases of this fork are tagged `<upstream version>.<fork revision>` (e.g. `1.7.15.19.1`); since
 `1.7.15.19.4` the version in `manifest.json` (with `const.py` and `pyproject.toml`) matches the tag.

@@ -40,6 +40,9 @@ from cryptography.exceptions import InvalidTag
 from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from custom_components.googlefindmy._reauth_reason import ReauthReasonCode
+from custom_components.googlefindmy.Auth.aas_token_retrieval import (
+    _mask_email_for_logs,
+)
 from custom_components.googlefindmy.Auth.token_cache import TokenCache
 from custom_components.googlefindmy.Auth.username_provider import (
     async_get_username,
@@ -61,8 +64,6 @@ from custom_components.googlefindmy.typing_utils import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-_USERNAME_REDACTION_MIN_LENGTH = 13
 
 # Cache key base for owner keys. We migrate from legacy "owner_key" to per-user keys.
 _OWNER_KEY_CACHE_PREFIX = "owner_key"
@@ -247,11 +248,9 @@ async def _retrieve_owner_key(
         "Retrieved owner key (version=%s, len=%s) for user=%s",
         owner_key_version,
         len(owner_key),
-        (
-            f"{username[:3]}***{username[-10:]}"
-            if len(username) > _USERNAME_REDACTION_MIN_LENGTH
-            else "***"
-        ),  # Redact email for privacy
+        # Fork change: same "j***@example.com" mask as the other log lines
+        # (the old form kept the last 10 characters of the address).
+        _mask_email_for_logs(username),
     )
 
     return {
@@ -438,8 +437,10 @@ async def async_get_owner_key(  # noqa: PLR0912,PLR0915
             _LOGGER.error(
                 "Owner key for user '%s' is not valid hex or base64/base64url. "
                 "Please store the key as a 64-char hex string (32 bytes). Error: %s",
-                user,
-                exc,
+                # Fork change: mask the account e-mail; log the error type only
+                # (a decoder message may quote part of the stored value).
+                _mask_email_for_logs(user),
+                type(exc).__name__,
             )
             # Clear per-user & legacy cache to prevent repeated failures on the same invalid data
             await cache.set(_user_cache_key(user), None)
@@ -462,7 +463,7 @@ async def async_get_owner_key(  # noqa: PLR0912,PLR0915
         _LOGGER.error(
             "Owner key for user '%s' has an invalid length: %d bytes (expected 32). "
             "Clear credentials and re-authenticate if this persists.",
-            user,
+            _mask_email_for_logs(user),
             len(key_bytes),
         )
         await cache.set(_user_cache_key(user), None)

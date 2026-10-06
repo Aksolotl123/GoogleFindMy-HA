@@ -1056,8 +1056,20 @@ def _stub_homeassistant() -> None:
         def __repr__(self) -> str:  # pragma: no cover - mirrors __str__
             return self.message
 
+    class Unauthorized(HomeAssistantError):
+        """Stubbed Unauthorized (fork: admin-only maintenance services)."""
+
+        def __init__(self, context: Any = None, **kwargs: Any) -> None:
+            super().__init__("Unauthorized")
+            self.context = context
+
+    class UnknownUser(Unauthorized):
+        """Stubbed UnknownUser."""
+
     exceptions_module.HomeAssistantError = HomeAssistantError
     exceptions_module.ConfigEntryNotReady = ConfigEntryNotReady
+    exceptions_module.Unauthorized = Unauthorized
+    exceptions_module.UnknownUser = UnknownUser
     exceptions_module.ServiceValidationError = ServiceValidationError
     exceptions_module.ConfigEntryAuthFailed = ConfigEntryAuthFailed
     sys.modules["homeassistant.exceptions"] = exceptions_module

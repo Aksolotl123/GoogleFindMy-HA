@@ -55,8 +55,9 @@ from .const import (
     OPT_LOCATION_POLL_INTERVAL,
     OPT_MAP_VIEW_TOKEN_EXPIRATION,
     OPT_MIN_POLL_INTERVAL,
+    SECRETS_EXTRA_WATCH_PATHS,
 )
-from .redaction import REDACTED, async_redact_data
+from .redaction import REDACTED, async_redact_data, describe_payload
 from .shared_helpers import normalize_fcm_entry_snapshot, safe_fcm_health_snapshots
 
 if TYPE_CHECKING:
@@ -318,6 +319,17 @@ def _reauth_reason_block(coordinator: Any) -> dict[str, Any] | None:
     }
 
 
+# Fork change: buffer context keys that hold free-form text - ``error_msg``
+# (``str(err)[:100]`` in coordinator/identity.py), ``arg``/``reason`` (the
+# user's locate argument and the error text in __init__'s
+# ``manual_locate_resolution_failed``) and generic message keys. Such text can
+# carry an e-mail address or a device name, so only its type and length are
+# exported. (Structured ``detail`` previews stay truncated as before.)
+_FREE_TEXT_KEYS: frozenset[str] = frozenset(
+    {"error_msg", "reason", "arg", "message", "msg", "error"}
+)
+
+
 def _sanitize_diag_entry(payload: Any) -> dict[str, Any]:
     """Return a diagnostics-friendly snapshot of a buffer entry."""
     if not isinstance(payload, dict):
@@ -336,6 +348,8 @@ def _sanitize_diag_entry(payload: Any) -> dict[str, Any]:
 
         if isinstance(value, (int, float, bool)) or value is None:
             sanitized[key] = value
+        elif lowered_key in _FREE_TEXT_KEYS:
+            sanitized[key] = describe_payload(value)
         else:
             sanitized[key] = _safe_truncate(value)
     return sanitized
@@ -582,6 +596,15 @@ async def async_get_config_entry_diagnostics(
 
     effective_config_for_diag = dict(effective_config)
     effective_config_for_diag.pop("min_accuracy_threshold", None)
+    # Fork change: extra secrets watch paths reveal the host layout (home
+    # directory / OS user name); report how many there are, not the paths.
+    watch_paths = effective_config_for_diag.get(SECRETS_EXTRA_WATCH_PATHS)
+    if isinstance(watch_paths, (list, tuple)):
+        effective_config_for_diag[SECRETS_EXTRA_WATCH_PATHS] = [REDACTED] * len(
+            watch_paths
+        )
+    elif watch_paths:
+        effective_config_for_diag[SECRETS_EXTRA_WATCH_PATHS] = REDACTED
 
     # Coerce to handle legacy list[str] format gracefully
     if isinstance(ignored_raw, list):

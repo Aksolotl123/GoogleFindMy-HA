@@ -9500,11 +9500,12 @@ async def async_remove_config_entry_device(
 
         if opts != entry.options:
             hass.config_entries.async_update_entry(entry, options=opts)
+            # Fork change: entry.title is the account e-mail; log the entry id only.
             _LOGGER.info(
                 "Marked device '%s' (%s) as ignored for entry '%s'",
                 name_to_store,
                 canonical_id,
-                entry.title,
+                entry.entry_id,
             )
     except Exception as err:
         _LOGGER.debug("Persisting delete decision failed for %s: %s", canonical_id, err)

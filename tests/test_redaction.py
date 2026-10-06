@@ -139,3 +139,35 @@ def test_email_with_underscore_is_masked_completely(key: str, expected: str) -> 
         assert "jan" not in out_key
         assert "kowalski" not in out_key
         assert "example.com" not in out_key
+
+
+# Fork change: key names match regardless of case and naming style; tuples are
+# walked like lists.
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["Access-Token", "accessToken", "ACCESS_TOKEN", "access-token", "AccessToken"],
+)
+def test_key_match_ignores_case_and_naming_style(key: str) -> None:
+    result = async_redact_data({key: "secret", "other": "keep"}, {"access_token"})
+
+    assert result == {key: REDACTED, "other": "keep"}
+
+
+def test_uppercase_entry_in_to_redact_matches_snake_case_key() -> None:
+    result = async_redact_data({"email": "a@b.c", "Token": "t"}, {"EMAIL", "token"})
+
+    assert result == {"email": REDACTED, "Token": REDACTED}
+
+
+def test_tuples_are_redacted_like_lists() -> None:
+    data = {"items": ({"token": "secret"}, "plain"), "top": ({"Email": "x"},)}
+
+    result = async_redact_data(data, {"token", "email"})
+
+    assert result == {
+        "items": [{"token": REDACTED}, "plain"],
+        "top": [{"Email": REDACTED}],
+    }
+    assert async_redact_data(({"token": "s"},), {"token"}) == [{"token": REDACTED}]

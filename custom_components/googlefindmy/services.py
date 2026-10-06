@@ -16,14 +16,20 @@ Compatibility
 
 from __future__ import annotations
 
+import functools
 import logging
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 from homeassistant.components.device_tracker import DOMAIN as DEVICE_TRACKER_DOMAIN
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    ServiceValidationError,
+    Unauthorized,
+    UnknownUser,
+)
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.network import NoURLAvailableError, get_url
@@ -412,7 +418,8 @@ async def async_rebuild_device_registry(hass: HomeAssistant, call: ServiceCall) 
             continue
 
         entry_id = entry.entry_id
-        _LOGGER.info("[%s] Hub Cleanup: Processing entry '%s'", entry_id, entry.title)
+        # Fork change: entry.title is the account e-mail; log the entry id only.
+        _LOGGER.info("[%s] Hub Cleanup: Processing entry", entry_id)
 
         # 1. Find the correct Service Device ID
         service_device_ident = service_device_identifier(entry_id)
@@ -723,6 +730,36 @@ async def async_rebuild_device_registry(hass: HomeAssistant, call: ServiceCall) 
         "Entity registry cleanup phase complete. Removed %d legacy tracker entities.",
         removed_entities,
     )
+
+
+def admin_only_service(
+    hass: HomeAssistant, handler: Callable[[ServiceCall], Awaitable[None]]
+) -> Callable[[ServiceCall], Awaitable[None]]:
+    """Wrap a service handler so that only administrators may call it.
+
+    Fork change. Same check as Core's ``async_register_admin_service``
+    (``homeassistant.helpers.service._async_admin_handler``): a call with a user
+    context must come from an existing admin user (``UnknownUser`` /
+    ``Unauthorized`` otherwise); calls without a user (automations, scripts,
+    internal callers) are allowed. Unlike the Core helper it keeps the plain
+    ``hass.services.async_register(domain, service, handler)`` registration
+    without a schema, because services.yaml is the SSoT here and the helper's
+    default schema would reject the ``rebuild_registry`` fields.
+    """
+
+    @functools.wraps(handler)
+    async def _admin_handler(call: ServiceCall) -> None:
+        context = getattr(call, "context", None)
+        user_id = getattr(context, "user_id", None)
+        if user_id:
+            user = await hass.auth.async_get_user(user_id)
+            if user is None:
+                raise UnknownUser(context=context)
+            if not user.is_admin:
+                raise Unauthorized(context=context)
+        await handler(call)
+
+    return _admin_handler
 
 
 async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> None:
@@ -1497,14 +1534,22 @@ async def async_register_services(hass: HomeAssistant, ctx: dict[str, Any]) -> N
     )
     hass.services.async_register(DOMAIN, SERVICE_PLAY_SOUND, async_play_sound_service)
     hass.services.async_register(DOMAIN, SERVICE_STOP_SOUND, async_stop_sound_service)
+    # Fork change: registry rewrites and config-entry reloads are maintenance
+    # operations; like Core's ``homeassistant.reload_config_entry`` they are
+    # restricted to administrators (a non-admin user gets ``Unauthorized``;
+    # automations and scripts without a user context still run them).
     hass.services.async_register(
-        DOMAIN, SERVICE_REFRESH_DEVICE_URLS, async_refresh_device_urls_service
+        DOMAIN,
+        SERVICE_REFRESH_DEVICE_URLS,
+        admin_only_service(hass, async_refresh_device_urls_service),
     )
     hass.services.async_register(
         DOMAIN,
         SERVICE_REBUILD_DEVICE_REGISTRY,
-        async_rebuild_device_registry_service,
+        admin_only_service(hass, async_rebuild_device_registry_service),
     )
     hass.services.async_register(
-        DOMAIN, SERVICE_REBUILD_REGISTRY, async_rebuild_registry_service
+        DOMAIN,
+        SERVICE_REBUILD_REGISTRY,
+        admin_only_service(hass, async_rebuild_registry_service),
     )
